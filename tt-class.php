@@ -7,7 +7,14 @@ class TemporalTransients {
     public $tt_version = 0.1;
     public $wp_version;
 
-    public function __construct() {
+    /**
+     * Start it going!
+     * Pass in true if its the first load so we are not doubling up and running
+     * WordPress filters more than required.
+     *
+     * @param bool $load
+     */
+    public function __construct($load = false) {
 
         // We make the WordPress version available just in case someone is using a legacy version
         global $wp_version;
@@ -22,8 +29,10 @@ class TemporalTransients {
         // Apply TT specific filters!
         $this->tt_filters();
 
-        // Do the WordPress filters!
-        $this->tt_add_filters();
+        if ($load) {
+            // Do the WordPress filters!
+            $this->tt_add_filters();
+        }
 
     }
 
@@ -34,7 +43,8 @@ class TemporalTransients {
      */
     public function set_settings() {
         $this->tt_settings = array(
-            "navigation" => true
+            "navigation" => true,
+            "the_content" => true
         );
     }
 
@@ -174,6 +184,53 @@ class TemporalTransients {
 
         return $value;
 
+    }
+
+    /**
+     * An Override for the_content
+     *
+     * Requires users to edit their themes
+     *
+     */
+
+    public function tt_the_content( $more_link_text = null, $strip_teaser = false) {
+
+        if ($this->tt_settings['the_content'] === true) {
+
+            // We hash the passed in variable as well as the post id in order to make sure that we are
+            // always getting the right information back from the transient API
+            $hash = wp_hash($more_link_text . $strip_teaser . get_the_ID());
+
+            $transient = get_transient('tt_content_' . $hash);
+
+            // If we get a transient back then echo that out and don't bother generating anything more
+            if ($transient) {
+                echo $transient;
+                return;
+            }
+
+        }
+
+        $content = get_the_content( $more_link_text, $strip_teaser );
+
+        /**
+         * Filter the post content.
+         *
+         * @since 0.71
+         *
+         * @param string $content Content of the current post.
+         */
+        $content = apply_filters( 'the_content', $content );
+        $content = str_replace( ']]>', ']]&gt;', $content );
+
+        if ($this->tt_settings['the_content'] === true) {
+
+            // Save this content for use later on
+            set_transient('tt_content_' . $hash, $content, $this->tt_time);
+
+        }
+
+        echo $content;
     }
 
 }
