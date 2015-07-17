@@ -369,8 +369,6 @@ class TemporalTransients {
 
                     $.post(ajaxurl, data, function(response) {
 
-                        console.log(response);
-
                         if(response >= 0) {
                             $(e).html('Purged - Purge again');
                         } else {
