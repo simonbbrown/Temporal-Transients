@@ -34,6 +34,17 @@ class TemporalTransients {
             $this->tt_add_filters();
         }
 
+        if(is_admin()) {
+            add_action( 'admin_init', array($this, 'tt_admin_init'));
+            add_action( 'admin_footer', array($this, 'tt_admin_ajax_purge_transients_javascript_css') );
+            add_action( 'wp_ajax_tt_purge_transients', array($this, 'tt_admin_ajax_purge_transients_action_callback') );
+        }
+
+    }
+
+    public function tt_admin_init() {
+        add_settings_section( 'tt_purge_cache_section', 'Temporal Transients - Purge All Transients', array($this,'tt_admin_purge_transients_section'), 'general' );
+        add_settings_field( 'tt_purge_cache_field', 'Purge Transients', array($this,'tt_admin_purge_transients_field'), 'general', 'tt_purge_cache_section');
     }
 
     /**
@@ -95,6 +106,11 @@ class TemporalTransients {
                 add_filter( 'wp_nav_menu', array($this,'tt_wp_nav_menu'), 10, 2);
                 add_action( 'wp_update_nav_menu', array($this,'tt_wp_update_nav_menu'), 10, 1);
                 add_filter( 'pre_set_theme_mod_nav_menu_locations', array($this, 'tt_pre_set_theme_mod_nav_menu_locations'),10, 2);
+            }
+
+            // Content filters
+            if (!empty($this->tt_settings['the_content'])) {
+                add_action( 'save_post', array($this, 'tt_save_post'));
             }
 
         }
@@ -192,14 +208,15 @@ class TemporalTransients {
      * Requires users to edit their themes
      *
      */
-
     public function tt_the_content( $more_link_text = null, $strip_teaser = false) {
+
+        $id = get_the_ID();
 
         if ($this->tt_settings['the_content'] === true) {
 
             // We hash the passed in variable as well as the post id in order to make sure that we are
             // always getting the right information back from the transient API
-            $hash = wp_hash($more_link_text . $strip_teaser . get_the_ID());
+            $hash = wp_hash($more_link_text . $strip_teaser . $id);
 
             $transient = get_transient('tt_content_' . $hash);
 
@@ -225,12 +242,171 @@ class TemporalTransients {
 
         if ($this->tt_settings['the_content'] === true) {
 
+            $content_directory = get_transient( 'tt_content_directory' );
+
+            if (!$content_directory) {
+                $content_directory = array();
+            }
+
             // Save this content for use later on
-            set_transient('tt_content_' . $hash, $content, $this->tt_time);
+            if ( set_transient('tt_content_' . $hash, $content, $this->tt_time) ) {
+                // Store a record of the hash and the page id for deletion when page is being updated.
+                // Store it for 1 year because I'm paranoid!
+                $content_directory[$hash] = $id;
+                set_transient('tt_content_directory', $content_directory, 60*60*24*365);
+            };
 
         }
 
         echo $content;
     }
 
+    /**
+     * Deletes a transient for a post when tt_the_content has been used to call it
+     *
+     * @param $post_id
+     * @param $post
+     * @param $update
+     */
+    public function tt_save_post($post_id) {
+
+        $content_directory = get_transient('tt_content_directory');
+
+        foreach ($content_directory as $hash => $id) {
+            if ($id == $post_id) {
+                delete_transient('tt_content_'.$hash);
+                unset($content_directory[$hash]);
+            }
+        }
+
+        set_transient('tt_content_directory', $content_directory, 60*60*24*365);
+
+    }
+
+    /**
+     * Add in our button to execute our action to purge transients via Ajax
+     * Added to the General Options page
+     *
+     */
+    public function tt_admin_purge_transients_field() {
+        echo '<button id="tt_delete_transients_ajax" class="button button-primary">Purge!</button>';
+    }
+
+    /**
+     * Add in our Section where out Ajax button will live
+     * Added to the General Options page
+     *
+     */
+    public function tt_admin_purge_transients_section() {
+        echo '<p>Purge all stored Temporal Transients<br/> Use this if your content is not being refreshed after updating your content.</p>';
+    }
+
+    /**
+     * Adds in required JS and CSS to the admin footer
+     *
+     */
+    public function tt_admin_ajax_purge_transients_javascript_css() {
+        $nonce = wp_create_nonce( "tt_purge_transients" );
+        ?>
+
+        <style>
+            @-ms-keyframes spin {
+                from { -ms-transform: rotate(0deg); }
+                to { -ms-transform: rotate(360deg); }
+            }
+            @-moz-keyframes spin {
+                from { -moz-transform: rotate(0deg); }
+                to { -moz-transform: rotate(360deg); }
+            }
+            @-webkit-keyframes spin {
+                from { -webkit-transform: rotate(0deg); }
+                to { -webkit-transform: rotate(360deg); }
+            }
+            @keyframes spin {
+                from {
+                    transform:rotate(0deg);
+                }
+                to {
+                    transform:rotate(360deg);
+                }
+            }
+            #tt_delete_transients_ajax span.spin {
+                padding: 3px 0;
+                
+                -webkit-animation-name: spin;
+                -webkit-animation-duration: 4000ms;
+                -webkit-animation-iteration-count: infinite;
+                -webkit-animation-timing-function: linear;
+                -moz-animation-name: spin;
+                -moz-animation-duration: 4000ms;
+                -moz-animation-iteration-count: infinite;
+                -moz-animation-timing-function: linear;
+                -ms-animation-name: spin;
+                -ms-animation-duration: 4000ms;
+                -ms-animation-iteration-count: infinite;
+                -ms-animation-timing-function: linear;
+
+                animation-name: spin;
+                animation-duration: 4000ms;
+                animation-iteration-count: infinite;
+                animation-timing-function: linear;
+            }
+        </style>
+
+        <script type="text/javascript" >
+            jQuery(document).ready(function($) {
+
+                var data = {
+                    'action': 'tt_purge_transients',
+                    'nonce': '<?php echo $nonce; ?>'
+                };
+
+                $('#tt_delete_transients_ajax').on('click', function(a) {
+                    a.preventDefault();
+                    var e = this;
+
+                    $(e).html('Purging <span class="dashicons dashicons-update spin"></span>');
+
+                    $.post(ajaxurl, data, function(response) {
+
+                        console.log(response);
+
+                        if(response >= 0) {
+                            $(e).html('Purged - Purge again');
+                        } else {
+                            $(e).replaceWith('<div class="error"><p>An Error Occured, Please refresh the page and try again</p></div>');
+                        }
+
+                    });
+
+                });
+
+            });
+        </script>
+
+        <?php
+    }
+
+    /**
+     * Our action for Purging Temporal Transients items
+     * Uses WordPress nonce to ensure security
+     *
+     * returns -1 if the nonce does not clear
+     * returns number of rows deleted when query is run
+     *
+     */
+    public function tt_admin_ajax_purge_transients_action_callback() {
+
+        check_ajax_referer('tt_purge_transients', 'nonce');
+
+        global $wpdb;
+
+        $query = "DELETE FROM $wpdb->options WHERE `option_name` LIKE '_transient_tt%'";
+        $result = $wpdb->query($query);
+
+        echo $result;
+
+        wp_die();
+
+    }
 }
