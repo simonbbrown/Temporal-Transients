@@ -97,6 +97,10 @@ class TemporalTransients {
      */
     public function tt_add_filters() {
 
+        //These filters should always run
+        //Delete Transients upon permalink update
+        add_filter('rewrite_rules_array', array($this, 'tt_rewrite_rules_array'));
+
         // Make sure that our users are running a compatible version of WordPress
         if (version_compare($this->wp_version, '3.9', '>=')) {
 
@@ -126,7 +130,10 @@ class TemporalTransients {
      */
     public function tt_pre_wp_nav_menu($output, $args) {
 
-        $transient = get_transient('tt_nav_'.$args->theme_location);
+        $hash_generator = new TT_Hash_Generator($args->theme_location);
+        $hash = $hash_generator->get_hash();
+
+        $transient = get_transient('tt_nav_'.$hash);
 
         // Get transient returns false if nothing was found, we need to only return if it has a value that is not false
         if ($transient) {
@@ -141,13 +148,16 @@ class TemporalTransients {
     /**
      * Grabs the generated menu and stores it
      *
-     * @param $nav_menu
-     * @param $args
-     * @return mixed
+     * @param $nav_menu - The generated HTML of the menu
+     * @param $args - arguments passed into the wp_nav_menu function
+     * @return $nav_menu
      */
     public function tt_wp_nav_menu($nav_menu, $args) {
 
-        set_transient('tt_nav_'.$args->theme_location, $nav_menu, $this->tt_time);
+        $hash_generator = new TT_Hash_Generator($args->theme_location);
+        $hash = $hash_generator->get_hash();
+
+        set_transient('tt_nav_'.$hash, $nav_menu, $this->tt_time);
 
         return $nav_menu;
 
@@ -160,13 +170,7 @@ class TemporalTransients {
      */
     public function tt_wp_update_nav_menu($menu_id) {
 
-        $menus = get_nav_menu_locations();
-
-        foreach ($menus as $location => $menu) {
-            if ($menu == $menu_id) {
-                delete_transient('tt_nav_'.$location);
-            }
-        }
+        $this->tt_purge_transient_type('nav');
 
     }
 
@@ -176,29 +180,10 @@ class TemporalTransients {
      *
      * @param $value
      * @param $old_value
-     * @return mixed
      */
     public function tt_pre_set_theme_mod_nav_menu_locations($value, $old_value) {
 
-        // Just in case something happens like they somehow remove all their menus
-        if ($old_value == false) {
-
-            foreach($value as $location => $menu_id ) {
-                delete_transient('tt_nav_'.$location);
-            }
-
-        } else {
-
-            // And this will do everything we want when the menu locations are updated
-            foreach ($old_value as $location => $menu_id) {
-                if ($menu_id != $value[$location]) {
-                    delete_transient('tt_nav_' . $location);
-                }
-            }
-
-        }
-
-        return $value;
+        $this->tt_purge_transient_type('nav');
 
     }
 
@@ -210,13 +195,10 @@ class TemporalTransients {
      */
     public function tt_the_content( $more_link_text = null, $strip_teaser = false) {
 
-        $id = get_the_ID();
+        $hash_generator = new TT_Hash_Generator;
+        $hash = $hash_generator->get_hash();
 
         if ($this->tt_settings['the_content'] === true) {
-
-            // We hash the passed in variable as well as the post id in order to make sure that we are
-            // always getting the right information back from the transient API
-            $hash = wp_hash($more_link_text . $strip_teaser . $id);
 
             $transient = get_transient('tt_content_' . $hash);
 
@@ -242,19 +224,7 @@ class TemporalTransients {
 
         if ($this->tt_settings['the_content'] === true) {
 
-            $content_directory = get_transient( 'tt_content_directory' );
-
-            if (!$content_directory) {
-                $content_directory = array();
-            }
-
-            // Save this content for use later on
-            if ( set_transient('tt_content_' . $hash, $content, $this->tt_time) ) {
-                // Store a record of the hash and the page id for deletion when page is being updated.
-                // Store it for 1 year because I'm paranoid!
-                $content_directory[$hash] = $id;
-                set_transient('tt_content_directory', $content_directory, 60*60*24*365);
-            };
+            set_transient('tt_content_' . $hash, $content, $this->tt_time);
 
         }
 
@@ -265,21 +235,27 @@ class TemporalTransients {
      * Deletes a transient for a post when tt_the_content has been used to call it
      *
      * @param $post_id
-     * @param $post
-     * @param $update
      */
     public function tt_save_post($post_id) {
 
-        $content_directory = get_transient('tt_content_directory');
+        $hash_generator = new TT_Hash_Generator;
+        $hash = $hash_generator->get_hash();
 
-        foreach ($content_directory as $hash => $id) {
-            if ($id == $post_id) {
-                delete_transient('tt_content_'.$hash);
-                unset($content_directory[$hash]);
-            }
-        }
+        delete_transient('tt_content_'.$hash);
 
-        set_transient('tt_content_directory', $content_directory, 60*60*24*365);
+    }
+
+    /**
+     * Purges all TT Transients from the database when the permalinks are updated.
+     *
+     * @param $rules
+     * @return mixed
+     */
+    public function tt_rewrite_rules_array($rules) {
+
+        $this->tt_purge_all_transients();
+
+        return $rules;
 
     }
 
@@ -397,14 +373,50 @@ class TemporalTransients {
 
         check_ajax_referer('tt_purge_transients', 'nonce');
 
+        echo $this->tt_purge_all_transients();
+
+        wp_die();
+
+    }
+
+    /**
+     * Purge All Temporal Transient items
+     *
+     * @return mixed
+     */
+    private function tt_purge_all_transients() {
         global $wpdb;
 
         $query = "DELETE FROM $wpdb->options WHERE `option_name` LIKE '_transient_tt%'";
         $result = $wpdb->query($query);
 
-        echo $result;
+        return $result;
+    }
 
-        wp_die();
+    /**
+     * Purgle a Specific Temporal Transient type
+     *
+     * Options:
+     * 'nav'
+     * 'content'
+     *
+     * @param mixed |false $type
+     * @return mixed
+     */
+    private function tt_purge_transient_type($type = false) {
+        if(!empty($type)) {
 
+            global $wpdb;
+
+            $like_string = "'_transient_tt_".$type."%'";
+
+            $query = "DELETE FROM $wpdb->options WHERE `option_name` LIKE ".$like_string;
+            $result = $wpdb->query($query);
+
+            return $result;
+
+        }
+
+        return $type;
     }
 }

@@ -3,7 +3,7 @@
  * Plugin Name: Temporal Transients
  * Plugin URI: http://www.simonbrown.com.au
  * Description: A Simple WordPress Plugin to help speed up your WordPress website by setting Transients for some of the more greedy functions
- * Version: 0.1
+ * Version: 0.2
  * Author: Simon Brown
  * Author URI: http://www.simonbrown.com.au
  * License: GPLv2 or later
@@ -11,6 +11,7 @@
  */
 
 include( plugin_dir_path( __FILE__ ) . 'tt-class.php');
+include( plugin_dir_path( __FILE__ ) . 'tt-hash-generator.php');
 $TemporalTransients = new TemporalTransients(true);
 
 register_activation_hook( __FILE__, array($TemporalTransients, 'install') );
